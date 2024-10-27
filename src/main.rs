@@ -65,9 +65,9 @@ fn main() -> ExitCode {
 }
 
 fn real_main(prg_name: &str, mut args: impl Iterator<Item = String>) -> io::Result<ExitCode> {
-    let mut parallel_threads = None::<u32>;
-
-    let mut rustc = std::env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc"));
+    let rustc = std::env::var_os("TEST_RUN_RUSTC")
+        .or_else(|| std::env::var_os("RUSTC"))
+        .unwrap_or_else(|| OsString::from("rustc"));
 
     // let client = match unsafe { jobserver::Client::from_env_ext(true) }.client {
     //     Ok(client) => client,
