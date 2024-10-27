@@ -1,0 +1,10 @@
+[package]
+name = "rust-spec-conformance"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+jobserver = "0.1.32"
+rand = "0.8.5"
+tempdir = "0.3.7"
+walkdir = "2.5.0"

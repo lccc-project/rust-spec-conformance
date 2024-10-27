@@ -1,0 +1,248 @@
+#![feature(os_str_display)]
+use std::ffi::OsString;
+use std::fs::FileType;
+use std::io::{self, Write};
+use std::num::NonZero;
+use std::path::PathBuf;
+use std::process::{Command, ExitCode, Stdio};
+
+use jobserver::FromEnvErrorKind;
+
+use rand::Rng;
+
+enum Mode {
+    RunPass,
+    RunFail,
+    CompileOnly,
+    CompileFail,
+}
+
+impl Mode {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::RunPass => "run-pass",
+            Self::RunFail => "run-fail",
+            Self::CompileOnly => "compile-only",
+            Self::CompileFail => "compile-fail",
+        }
+    }
+
+    fn requires_success(&self) -> bool {
+        matches!(self, Self::RunPass | Self::CompileOnly)
+    }
+
+    fn is_run(&self) -> bool {
+        matches!(self, Mode::RunPass | Mode::RunFail)
+    }
+
+    fn check_result(&self, result: std::process::ExitStatus) -> bool {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            if result.signal().is_some() {
+                return false;
+            }
+        }
+
+        match self {
+            Self::RunFail | Self::CompileFail => !result.success(),
+            Self::RunPass | Self::CompileOnly => result.success(),
+        }
+    }
+}
+
+fn main() -> ExitCode {
+    let mut args = std::env::args();
+    let prg_name = args.next().unwrap();
+
+    match real_main(&prg_name, args) {
+        Ok(c) => c,
+        Err(e) => {
+            println!("{prg_name}: {e}");
+            ExitCode::from(101u8)
+        }
+    }
+}
+
+fn real_main(prg_name: &str, mut args: impl Iterator<Item = String>) -> io::Result<ExitCode> {
+    let mut parallel_threads = None::<u32>;
+
+    let mut rustc = std::env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc"));
+
+    // let client = match unsafe { jobserver::Client::from_env_ext(true) }.client {
+    //     Ok(client) => client,
+    //     Err(e) => match e.kind() {
+    //         FromEnvErrorKind::NoEnvVar => jobserver::Client::new(
+    //             std::thread::available_parallelism()
+    //                 .map(NonZero::get)
+    //                 .unwrap_or(1),
+    //         )?,
+    //         FromEnvErrorKind::NoJobserver => jobserver::Client::new(1)?,
+    //         k => {
+    //             let io_kind = match k {
+    //                 FromEnvErrorKind::NoEnvVar | FromEnvErrorKind::NoJobserver => unreachable!(),
+
+    //                 FromEnvErrorKind::CannotParse => io::ErrorKind::InvalidData,
+    //                 FromEnvErrorKind::CannotOpenPath | FromEnvErrorKind::CannotOpenFd => {
+    //                     io::ErrorKind::NotFound
+    //                 }
+    //                 FromEnvErrorKind::NegativeFd => io::ErrorKind::InvalidInput,
+    //                 FromEnvErrorKind::Unsupported => io::ErrorKind::Unsupported,
+    //                 _ => io::ErrorKind::Other,
+    //             };
+
+    //             return Err(io::Error::new(
+    //                 io_kind,
+    //                 format!("Cannot open jobserver {e}"),
+    //             ));
+    //         }
+    //     },
+    // };
+
+    let tmp_dir = tempdir::TempDir::new("conformance-suite-build")?;
+
+    let mut gen = rand::thread_rng();
+
+    let mut failed_tests = Vec::new();
+
+    for (ctr, entry) in walkdir::WalkDir::new("suite").into_iter().enumerate() {
+        let entry = entry?;
+
+        if entry.file_type().is_file() {
+            use std::io::BufRead;
+            let path = entry.into_path();
+
+            let mut end = OsString::from("out-");
+            end.push(&format!("{ctr}-{:08x}-", gen.gen::<u32>()));
+            end.push(
+                path.components()
+                    .last()
+                    .expect("Must have at least one component")
+                    .as_os_str(),
+            );
+            let mut end = PathBuf::from(end);
+            end.set_extension("out");
+
+            let temp_dir_path = tmp_dir.path().join(end);
+            let file = io::BufReader::new(std::fs::File::open(&path)?);
+
+            let mut mode = None;
+
+            for lines in file.lines() {
+                let line = lines?;
+                if line.starts_with("#!") {
+                    continue;
+                }
+                let line = line.trim();
+
+                if line.is_empty() {
+                    continue;
+                } else if let Some(directive) = line.strip_prefix("//") {
+                    match directive {
+                        x if x.starts_with("@ compile-fail") => mode = Some(Mode::CompileFail),
+                        x if x.starts_with("@ compile-only") => mode = Some(Mode::CompileOnly),
+                        x if x.starts_with("@ run-fail") => mode = Some(Mode::RunFail),
+                        x if x.starts_with("@ run-pass") => mode = Some(Mode::RunPass),
+                        x if x.starts_with("@ reference") => {} // Deliberately ignored
+                        x if x.starts_with("@") => eprintln!(
+                            "Warning: {}: Directive {} not recognized",
+                            path.display(),
+                            x.trim_start_matches("@").trim_start()
+                        ),
+                        _ => continue,
+                    }
+                } else {
+                    break;
+                }
+            }
+            let mode = if let Some(mode) = mode {
+                mode
+            } else {
+                eprintln!(
+                    "Warning: Test {} does not have a mode directive. Assuming compile-only",
+                    path.display()
+                );
+                Mode::RunPass
+            };
+            print!("Running test {} ({})... ", path.display(), mode.name());
+
+            let success = if mode.is_run() {
+                let status1 = Command::new(&rustc)
+                    .args(["--crate-type", "bin"])
+                    .args(["--crate-name", "__"])
+                    .arg("-o")
+                    .arg(&temp_dir_path)
+                    .arg(&path)
+                    .env_remove("RUSTC_BOOTSTRAP")
+                    .stderr(Stdio::null())
+                    .stdout(Stdio::piped())
+                    .stdin(Stdio::null())
+                    .output()?;
+
+                if !status1.status.success() {
+                    eprintln!("Test {} stderr: ", path.display());
+                    let _ = std::io::stderr().write_all(&status1.stderr);
+                    false
+                } else {
+                    mode.check_result(
+                        Command::new(&temp_dir_path)
+                            .stderr(Stdio::null())
+                            .stdout(Stdio::null())
+                            .stdin(Stdio::null())
+                            .status()?,
+                    )
+                }
+            } else {
+                let output = Command::new(&rustc)
+                    .args(["--crate-type", "rlib"])
+                    .args(["--crate-name", "__"])
+                    .arg("-o")
+                    .arg(&temp_dir_path)
+                    .arg(&path)
+                    .env_remove("RUSTC_BOOTSTRAP")
+                    .stderr(Stdio::null())
+                    .stdout(Stdio::piped())
+                    .stdin(Stdio::null())
+                    .output()?;
+
+                let res = mode.check_result(output.status);
+
+                if !res && !output.status.success() {
+                    eprintln!("Test {} stderr: ", path.display());
+                    let _ = std::io::stderr().write_all(&output.stderr);
+                }
+                res
+            };
+
+            if !success {
+                if mode.requires_success() {
+                    println!("failed")
+                } else {
+                    println!("unexpected success");
+                }
+                failed_tests.push(path);
+            } else {
+                if mode.requires_success() {
+                    println!("passed");
+                } else {
+                    println!("expected failure");
+                }
+            }
+        }
+    }
+
+    if !failed_tests.is_empty() {
+        println!(
+            "{} tests failed with rustc={}",
+            failed_tests.len(),
+            rustc.display()
+        );
+        for test in failed_tests {
+            println!("\t{}", test.display());
+        }
+        Ok(ExitCode::FAILURE)
+    } else {
+        println!("All tests passed");
+        Ok(ExitCode::SUCCESS)
+    }
+}

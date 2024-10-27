@@ -1,0 +1,3 @@
+#![
+//@ compile-fail: The above line should not be removed and should not lex
+//@ reference: input.shebang.inner-attribute
