@@ -126,7 +126,8 @@ fn real_main(prg_name: &str, mut args: impl Iterator<Item = String>) -> io::Resu
             let temp_dir_path = tmp_dir.path().join(end);
             let file = io::BufReader::new(std::fs::File::open(&path)?);
 
-            let mut mode = None;
+            let mut mode = None::<Mode>;
+            let mut edition = None;
 
             for lines in file.lines() {
                 let line = lines?;
@@ -137,19 +138,54 @@ fn real_main(prg_name: &str, mut args: impl Iterator<Item = String>) -> io::Resu
 
                 if line.is_empty() {
                     continue;
-                } else if let Some(directive) = line.strip_prefix("//") {
-                    match directive {
-                        x if x.starts_with("@ compile-fail") => mode = Some(Mode::CompileFail),
-                        x if x.starts_with("@ compile-only") => mode = Some(Mode::CompileOnly),
-                        x if x.starts_with("@ run-fail") => mode = Some(Mode::RunFail),
-                        x if x.starts_with("@ run-pass") => mode = Some(Mode::RunPass),
-                        x if x.starts_with("@ reference") => {} // Deliberately ignored
-                        x if x.starts_with("@") => eprintln!(
-                            "Warning: {}: Directive {} not recognized",
-                            path.display(),
-                            x.trim_start_matches("@").trim_start()
-                        ),
-                        _ => continue,
+                } else if let Some(comment) = line.strip_prefix("//") {
+                    if let Some(directive) = comment.strip_prefix("@").map(str::trim_start) {
+                        let directive = directive
+                            .split_once(":")
+                            .map_or(directive, |(directive, _)| directive);
+                        match directive.trim() {
+                            "compile-fail" => {
+                                if let Some(mode) = &mode {
+                                    eprintln!("Warning: {}: Directive compile-fail overriding previous mode {}", path.display(), mode.name());
+                                }
+                                mode = Some(Mode::CompileFail)
+                            }
+                            "compile-only" => {
+                                if let Some(mode) = &mode {
+                                    eprintln!("Warning: {}: Directive compile-only overriding previous mode {}", path.display(), mode.name());
+                                }
+                                mode = Some(Mode::CompileOnly)
+                            }
+                            "run-fail" => {
+                                if let Some(mode) = &mode {
+                                    eprintln!("Warning: {}: Directive run-fail overriding previous mode {}", path.display(), mode.name());
+                                }
+                                mode = Some(Mode::RunFail)
+                            }
+                            "run-pass" => {
+                                if let Some(mode) = &mode {
+                                    eprintln!("Warning: {}: Directive run-pass overriding previous mode {}", path.display(), mode.name());
+                                }
+                                mode = Some(Mode::RunPass)
+                            }
+                            "reference" => {}
+                            x if x.starts_with("edition=") => {
+                                let ed = x.strip_prefix("edition=").unwrap().trim_start();
+                                if let Some(edition) = edition {
+                                    eprintln!("Warning: {}: Directive edition={} overriding previous edition {}", path.display(), ed, edition);
+                                }
+                                edition = Some(ed.parse::<u32>().map_err(|e| {
+                                    io::Error::new(
+                                        io::ErrorKind::InvalidData,
+                                        format!("{}: Edition malformed {ed}", path.display()),
+                                    )
+                                })?);
+                            }
+                            x => eprintln!(
+                                "Warning: {}: Unrecognized or malformed directive {x}",
+                                path.display()
+                            ),
+                        }
                     }
                 } else {
                     break;
@@ -170,6 +206,12 @@ fn real_main(prg_name: &str, mut args: impl Iterator<Item = String>) -> io::Resu
                 let status1 = Command::new(&rustc)
                     .args(["--crate-type", "bin"])
                     .args(["--crate-name", "__"])
+                    .args(
+                        edition
+                            .map(|e| [String::from("--edition"), format!("{e}")])
+                            .into_iter()
+                            .flatten(),
+                    )
                     .arg("-o")
                     .arg(&temp_dir_path)
                     .arg(&path)
