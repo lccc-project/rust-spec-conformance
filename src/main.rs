@@ -198,7 +198,7 @@ fn real_main(prg_name: &str, mut args: impl Iterator<Item = String>) -> io::Resu
                     "Warning: Test {} does not have a mode directive. Assuming compile-only",
                     path.display()
                 );
-                Mode::RunPass
+                Mode::CompileOnly
             };
             print!("Running test {} ({})... ", path.display(), mode.name());
 
