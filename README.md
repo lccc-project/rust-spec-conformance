@@ -3,6 +3,8 @@
 This is a conformance test suite for the Rust Specification. It is primarily intended for use by the lccc project, though it is intended to be useful for any Rust compiler.
 This test suite is not an official test suite produced by the Rust Project or Rust Foundation, and is not endorsed or associated with either, but is intended to be correct (and eventually complete).
 
+The Specification the suite is based on is the [Rust Reference](https://doc.rust-lang.org/nightly/reference), as it is turned into the Rust Specification by the efforts of the Rust Project Specification Team and the Rust Foundation.
+
 The Suite is intended to be comprehensive, but not exhaustive - it will test both success and failure conditions in the language and standard library implementation, but will not test every possible rust program, or obscure feature interactions. It also does not test QoI feature like diagnostics. An implementation that wishes to check precise diagnostics would need to devise its own test suite 
 
 ## Adding new tests
