@@ -104,8 +104,7 @@ fn real_main(prg_name: &str, mut args: impl Iterator<Item = String>) -> io::Resu
     let mut gen = rand::thread_rng();
 
     let mut failed_tests = Vec::new();
-
-    for (ctr, entry) in walkdir::WalkDir::new("suite").into_iter().enumerate() {
+    'walkdir: for (ctr, entry) in walkdir::WalkDir::new("suite").into_iter().enumerate() {
         let entry = entry?;
 
         if entry.file_type().is_file() {
@@ -144,6 +143,7 @@ fn real_main(prg_name: &str, mut args: impl Iterator<Item = String>) -> io::Resu
                             .split_once(":")
                             .map_or(directive, |(directive, _)| directive);
                         match directive.trim() {
+                            "skip" => continue 'walkdir,
                             "compile-fail" => {
                                 if let Some(mode) = &mode {
                                     eprintln!("Warning: {}: Directive compile-fail overriding previous mode {}", path.display(), mode.name());
@@ -204,7 +204,7 @@ fn real_main(prg_name: &str, mut args: impl Iterator<Item = String>) -> io::Resu
 
             let success = if mode.is_run() {
                 let status1 = Command::new(&rustc)
-                    .args(["--crate-type", "bin"])
+                    .arg("--test")
                     .args(["--crate-name", "__"])
                     .args(
                         edition
