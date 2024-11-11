@@ -200,18 +200,16 @@ fn real_main(prg_name: &str, mut args: impl Iterator<Item = String>) -> io::Resu
                 );
                 Mode::CompileOnly
             };
+
+            let edition = edition.unwrap_or(2021);
             print!("Running test {} ({})... ", path.display(), mode.name());
 
             let success = if mode.is_run() {
                 let status1 = Command::new(&rustc)
                     .arg("--test")
                     .args(["--crate-name", "__"])
-                    .args(
-                        edition
-                            .map(|e| [String::from("--edition"), format!("{e}")])
-                            .into_iter()
-                            .flatten(),
-                    )
+                    .arg("--edition")
+                    .arg(format!("{edition}"))
                     .arg("-o")
                     .arg(&temp_dir_path)
                     .arg(&path)
