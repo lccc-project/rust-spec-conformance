@@ -13,7 +13,16 @@ struct ReprRustStruct {
     b: Overaligned,
 }
 
-include!("aggregate-fields.rs");
+macro_rules! span_of {
+    ($ty:ty , $field:tt) => {{
+        let __field = unsafe { ::core::mem::zeroed::<$ty>() };
+
+        (
+            core::mem::offset_of!($ty, $field),
+            core::mem::offset_of!($ty, $field) + core::mem::size_of_val(&__field.$field),
+        )
+    }};
+}
 
 fn test_fields_make_sense(a: &(usize, usize)) {
     assert!(a.0 <= a.1);
@@ -24,7 +33,7 @@ fn test_non_overlapping(a: &(usize, usize), b: &(usize, usize)) {
     assert!((a.1 <= b.0) || (b.1 <= a.0));
 }
 
-#[test]
+#[cfg_attr(test, test)]
 fn test_fields_non_overlapping() {
     let fields = [
         span_of!(ReprRustStruct, x),
@@ -44,7 +53,7 @@ fn test_fields_non_overlapping() {
     test_non_overlapping(&fields[3], &fields[4]);
 }
 
-#[test]
+#[cfg_attr(test, test)]
 fn test_fields_aligned() {
     assert_eq!(
         (core::mem::offset_of!(ReprRustStruct, x) % (core::mem::align_of::<i32>())),
@@ -66,4 +75,10 @@ fn test_fields_aligned() {
         (core::mem::offset_of!(ReprRustStruct, b) % (core::mem::align_of::<Overaligned>())),
         0
     );
+}
+
+#[cfg(not(test))]
+fn main() {
+    test_fields_non_overlapping();
+    test_fields_aligned();
 }
