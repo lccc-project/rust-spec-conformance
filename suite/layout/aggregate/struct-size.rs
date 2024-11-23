@@ -1,6 +1,8 @@
 //@ run-pass
 //@ reference: layout.aggregate.struct-size-align
+//@ edition: 2018
 
+#[allow(dead_code)]
 struct ReprRustStruct {
     x: i32,
     y: [u32; 4],

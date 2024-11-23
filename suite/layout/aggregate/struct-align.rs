@@ -1,10 +1,13 @@
 //@ run-pass
 //@ reference: layout.aggregate.struct-size-align
+//@ edition: 2018
 
 #[repr(align(64))]
 #[derive(Copy, Clone)]
+#[allow(dead_code)]
 pub struct Overaligned(u8);
 
+#[allow(dead_code)]
 struct ReprRustStruct {
     x: i32,
     y: [u32; 4],

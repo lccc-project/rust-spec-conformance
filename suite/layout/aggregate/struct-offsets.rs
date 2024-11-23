@@ -1,10 +1,13 @@
 //@ run-pass
 //@ reference: layout.aggregate.struct-offsets
+//@ edition: 2018
 
 #[repr(align(64))]
 #[derive(Copy, Clone)]
+#[allow(dead_code)]
 pub struct Overaligned(u8);
 
+#[allow(dead_code)]
 struct ReprRustStruct {
     x: i32,
     y: [u32; 4],
@@ -42,6 +45,12 @@ fn test_fields_non_overlapping() {
         span_of!(ReprRustStruct, a),
         span_of!(ReprRustStruct, b),
     ];
+
+    test_fields_make_sense(&fields[0]);
+    test_fields_make_sense(&fields[1]);
+    test_fields_make_sense(&fields[2]);
+    test_fields_make_sense(&fields[3]);
+    test_fields_make_sense(&fields[4]);
 
     test_non_overlapping(&fields[0], &fields[1]);
     test_non_overlapping(&fields[0], &fields[2]);
