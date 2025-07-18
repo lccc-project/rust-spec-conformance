@@ -150,6 +150,10 @@ fn real_main(prg_name: &str, mut args: impl Iterator<Item = String>) -> io::Resu
                 if line.is_empty() {
                     continue;
                 } else if let Some(comment) = line.strip_prefix("//") {
+                    if comment.starts_with("!@") {
+                        continue; // This is a disabled directive
+                    }
+
                     if let Some(directive) = comment.strip_prefix("@").map(str::trim_start) {
                         let (directive, param) = directive
                             .split_once(":")

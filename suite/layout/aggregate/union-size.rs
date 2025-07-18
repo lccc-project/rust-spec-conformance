@@ -1,6 +1,5 @@
 //@ run-pass
 //@ reference: layout.aggregate.struct-size-align
-//@ edition: 2018
 
 #[allow(dead_code)]
 union ReprRustUnion {
