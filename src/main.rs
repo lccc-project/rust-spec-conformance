@@ -10,6 +10,8 @@ use jobserver::FromEnvErrorKind;
 
 use rand::Rng;
 
+mod compiler;
+
 enum Mode {
     RunPass,
     RunFail,
@@ -69,35 +71,45 @@ fn real_main(prg_name: &str, mut args: impl Iterator<Item = String>) -> io::Resu
         .or_else(|| std::env::var_os("RUSTC"))
         .unwrap_or_else(|| OsString::from("rustc"));
 
-    // let client = match unsafe { jobserver::Client::from_env_ext(true) }.client {
-    //     Ok(client) => client,
-    //     Err(e) => match e.kind() {
-    //         FromEnvErrorKind::NoEnvVar => jobserver::Client::new(
-    //             std::thread::available_parallelism()
-    //                 .map(NonZero::get)
-    //                 .unwrap_or(1),
-    //         )?,
-    //         FromEnvErrorKind::NoJobserver => jobserver::Client::new(1)?,
-    //         k => {
-    //             let io_kind = match k {
-    //                 FromEnvErrorKind::NoEnvVar | FromEnvErrorKind::NoJobserver => unreachable!(),
+    let mut schema_file = None::<PathBuf>;
 
-    //                 FromEnvErrorKind::CannotParse => io::ErrorKind::InvalidData,
-    //                 FromEnvErrorKind::CannotOpenPath | FromEnvErrorKind::CannotOpenFd => {
-    //                     io::ErrorKind::NotFound
-    //                 }
-    //                 FromEnvErrorKind::NegativeFd => io::ErrorKind::InvalidInput,
-    //                 FromEnvErrorKind::Unsupported => io::ErrorKind::Unsupported,
-    //                 _ => io::ErrorKind::Other,
-    //             };
-
-    //             return Err(io::Error::new(
-    //                 io_kind,
-    //                 format!("Cannot open jobserver {e}"),
-    //             ));
+    // while let Some(arg) = args.next() {
+    //     match &*arg {
+    //         "--rustc-kind" => {
+    //             // Override the kind of rustc used
     //         }
-    //     },
-    // };
+    //     }
+    // }
+
+    let client = match unsafe { jobserver::Client::from_env_ext(true) }.client {
+        Ok(client) => client,
+        Err(e) => match e.kind() {
+            FromEnvErrorKind::NoEnvVar => jobserver::Client::new(
+                std::thread::available_parallelism()
+                    .map(NonZero::get)
+                    .unwrap_or(1),
+            )?,
+            FromEnvErrorKind::NoJobserver => jobserver::Client::new(1)?,
+            k => {
+                let io_kind = match k {
+                    FromEnvErrorKind::NoEnvVar | FromEnvErrorKind::NoJobserver => unreachable!(),
+
+                    FromEnvErrorKind::CannotParse => io::ErrorKind::InvalidData,
+                    FromEnvErrorKind::CannotOpenPath | FromEnvErrorKind::CannotOpenFd => {
+                        io::ErrorKind::NotFound
+                    }
+                    FromEnvErrorKind::NegativeFd => io::ErrorKind::InvalidInput,
+                    FromEnvErrorKind::Unsupported => io::ErrorKind::Unsupported,
+                    _ => io::ErrorKind::Other,
+                };
+
+                return Err(io::Error::new(
+                    io_kind,
+                    format!("Cannot open jobserver {e}"),
+                ));
+            }
+        },
+    };
 
     let tmp_dir = tempdir::TempDir::new("conformance-suite-build")?;
 
@@ -139,9 +151,9 @@ fn real_main(prg_name: &str, mut args: impl Iterator<Item = String>) -> io::Resu
                     continue;
                 } else if let Some(comment) = line.strip_prefix("//") {
                     if let Some(directive) = comment.strip_prefix("@").map(str::trim_start) {
-                        let directive = directive
+                        let (directive, param) = directive
                             .split_once(":")
-                            .map_or(directive, |(directive, _)| directive);
+                            .map_or((directive, ""), |(directive, param)| (directive, param));
                         match directive.trim() {
                             "skip" => continue 'walkdir,
                             "compile-fail" => {
@@ -169,6 +181,18 @@ fn real_main(prg_name: &str, mut args: impl Iterator<Item = String>) -> io::Resu
                                 mode = Some(Mode::RunPass)
                             }
                             "reference" => {}
+                            "edition" => {
+                                let ed = param.trim();
+                                if let Some(edition) = edition {
+                                    eprintln!("Warning: {}: Directive edition: {} overriding previous edition {}", path.display(), ed, edition);
+                                }
+                                edition = Some(ed.parse::<u32>().map_err(|e| {
+                                    io::Error::new(
+                                        io::ErrorKind::InvalidData,
+                                        format!("{}: Edition malformed {ed}", path.display()),
+                                    )
+                                })?);
+                            }
                             x if x.starts_with("edition=") => {
                                 let ed = x.strip_prefix("edition=").unwrap().trim_start();
                                 if let Some(edition) = edition {
@@ -214,23 +238,28 @@ fn real_main(prg_name: &str, mut args: impl Iterator<Item = String>) -> io::Resu
                     .arg(&temp_dir_path)
                     .arg(&path)
                     .env_remove("RUSTC_BOOTSTRAP")
-                    .stderr(Stdio::null())
+                    .stderr(Stdio::piped())
                     .stdout(Stdio::piped())
                     .stdin(Stdio::null())
                     .output()?;
 
                 if !status1.status.success() {
-                    eprintln!("Test {} stderr: ", path.display());
+                    eprintln!("Test {} (compiler) stderr: ", path.display());
                     let _ = std::io::stderr().write_all(&status1.stderr);
                     false
                 } else {
-                    mode.check_result(
-                        Command::new(&temp_dir_path)
-                            .stderr(Stdio::null())
-                            .stdout(Stdio::null())
-                            .stdin(Stdio::null())
-                            .status()?,
-                    )
+                    let status2 = Command::new(&temp_dir_path)
+                        .stderr(Stdio::piped())
+                        .stdout(Stdio::null())
+                        .stdin(Stdio::null())
+                        .output()?;
+                    let success = mode.check_result(status2.status);
+
+                    if !success {
+                        eprintln!("Test {} stderr:", path.display());
+                        let _ = std::io::stderr().write_all(&status2.stderr);
+                    }
+                    success
                 }
             } else {
                 let output = Command::new(&rustc)

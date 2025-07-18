@@ -1,0 +1,6 @@
+[compiler]
+
+[diagnostics]
+error-type-path = ".code.code"
+
+[diagnostics.codes]
